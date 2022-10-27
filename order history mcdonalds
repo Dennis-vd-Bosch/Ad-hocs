@@ -1,0 +1,46 @@
+WITH vendor_grouping AS (
+SELECT 
+c.code AS customer_id
+, order_code
+-- , EXTRACT(MONTH FROM order_date) AS order_month
+-- , CASE WHEN chain_code = "cv7oz" /*Max Hamburgare*/ THEN 1 END AS max_orders
+, CASE WHEN chain_code = "ci1kh"	/*McDonald's*/ THEN 1 END AS mcd_orders
+, CASE WHEN chain_code NOT IN ("ci1kh") OR chain_code IS NULL THEN 1 END AS other_vendor_orders 
+
+
+-- , COUNT(order_code) AS number_of_orders
+FROM `foodora-bi-se.bl_bi.order_rank` AS o 
+  LEFT JOIN  `fulfillment-dwh-production.pandata_curated.cus_customers` AS c
+        ON o.pd_customer_id = c.id
+
+WHERE o.created_date_utc >= "2022-01-01" 
+  AND o.global_entity_id = "OP_SE"
+  AND c.global_entity_id = "OP_SE"
+  AND is_valid_order IS TRUE
+  AND is_gross_order IS TRUE
+),
+
+grouping_prep AS (
+SELECT 
+  customer_id 
+-- , order_month
+, SUM(mcd_orders) AS total_mcd_orders
+, SUM(other_vendor_orders) AS total_other_orders
+, COUNT(order_code) AS total_orders
+
+FROM vendor_grouping 
+
+GROUP BY customer_id--, order_month
+ORDER BY 1 DESC
+)
+
+
+SELECT
+-- COUNT(DISTINCT customer_id)
+*
+FROM grouping_prep 
+
+WHERE total_mcd_orders > 0 
+
+
+
