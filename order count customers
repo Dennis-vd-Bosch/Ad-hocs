@@ -1,0 +1,19 @@
+WITH prep AS ( 
+  SELECT 
+    pd_customer_id
+  , COUNT(distinct order_code) AS order_count
+
+  FROM `foodora-bi-se.bl_bi.order_rank`
+
+  WHERE is_gross_order IS TRUE
+    AND is_valid_order IS TRUE 
+    AND created_date_utc >= "2022-01-01"
+    AND global_entity_id = "OP_SE"
+
+  GROUP BY 1 
+) 
+
+SELECT
+  COUNT(DISTINCT pd_customer_id) AS number_of_customers 
+FROM prep
+WHERE order_count = 1 
