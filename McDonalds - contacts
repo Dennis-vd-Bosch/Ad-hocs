@@ -38,3 +38,21 @@ WHERE rank_contact = 1
 GROUP BY 1,2,3,4,5,6
 ORDER BY 7 DESC
 
+
+
+
+
+
+SELECT 
+  EXTRACT(WEEK FROM created_date_utc) AS week
+, EXTRACT(MONTH FROM created_date_utc) AS month
+, COUNT(DISTINCT order_code) total_number_of_orders
+
+FROM `foodora-bi-se.bl_bi.order_rank`
+
+WHERE global_entity_id = "OP_SE"
+  AND created_date_utc >= "2022-01-01"
+  AND chain_code = "ci1kh" -- mcdonalds 
+
+GROUP BY 1,2 
+ORDER BY 3 DESC
