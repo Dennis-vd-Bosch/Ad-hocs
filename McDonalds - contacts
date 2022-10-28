@@ -1,0 +1,40 @@
+WITH prep AS (
+  SELECT 
+    c.order_id,
+    c.channel,
+    c.contact_reason_l1 AS CCR1,
+    c.contact_reason_l2 AS CCR2,
+    c.contact_reason_l3 AS CCR3,
+    c.created_date,
+    ROW_NUMBER() OVER (PARTITION BY c.global_entity_id, c.order_id ORDER BY c.creation_timestamp DESC) AS rank_contact
+    , r.chain_code
+  
+  FROM `fulfillment-dwh-production.curated_data_shared_gcc_service.all_contacts` c
+  LEFT JOIN `foodora-bi-se.bl_bi.order_rank` AS r
+         ON c.vendor_id = r.vendor_code AND c.global_entity_id = r.global_entity_id 
+
+  WHERE c.global_entity_id = 'OP_SE'
+    AND r.global_entity_id = "OP_SE"
+
+    AND r.created_date_utc = "2022-01-01"
+    AND created_date = "2022-01-01"
+
+    AND c.order_id IS NOT NULL 
+    AND chain_code = "ci1kh" -- mcdonalds 
+)
+
+SELECT 
+  channel
+, CCR1
+, CCR2
+, CCR3 
+, EXTRACT(week FROM created_date) AS week 
+, EXTRACT(month FROM created_date) AS month
+, COUNT(DISTINCT order_id) AS number_of_contacts
+
+FROM prep 
+WHERE rank_contact = 1 
+
+GROUP BY 1,2,3,4,5,6
+ORDER BY 7 DESC
+
