@@ -13,7 +13,19 @@ WITH prep AS (
   GROUP BY 1 
 ) 
 
-SELECT
-  COUNT(DISTINCT pd_customer_id) AS number_of_customers 
-FROM prep
-WHERE order_count = 1 
+-- SELECT
+--   COUNT(DISTINCT pd_customer_id) AS number_of_customers 
+-- FROM prep
+-- WHERE order_count = 1 
+
+
+SELECT 
+COUNT(DISTINCT pd_customer_id) AS number_of_customers
+, CASE WHEN order_count = 1 THEN "made 1 order"
+       WHEN order_count IS NULL THEN "nulls"
+       WHEN order_count > 1 THEN "made more than 1 order"
+        END as group_orders 
+
+FROM prep 
+GROUP BY 2
+
