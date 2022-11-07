@@ -28,3 +28,379 @@ WHERE r.global_entity_id = "OP_SE"
 SELECT * FROM prep 
 WHERE chain_name = "Foodora Market"
 
+
+
+
+-----------------------------------
+---------------------------------
+
+--Report fetches all orders that has either;
+  --a. billable failed order (implied full refund)
+  --b. gfv change based on accounting cart calculations (implied partial refunds)
+
+--Nested fields for 
+  --Contacts
+  --Compensation and refund events
+  --PSP transactions
+  --Basket updates
+
+
+WITH contacts AS (
+  SELECT
+    c.global_entity_id
+    , c.order_id AS order_code
+    , o.uuid AS order_uuid
+    , ARRAY_AGG(
+      STRUCT(    
+        DATETIME(c.creation_timestamp,timezone) as ticket_created_at
+        , c.contact_reason_l1 
+        , c.contact_reason_l2
+        , c.contact_reason_l3
+      )
+    ) AS contacts
+
+  FROM `fulfillment-dwh-production.curated_data_shared_gcc_service.all_contacts` AS c
+  LEFT JOIN `fulfillment-dwh-production.pandata_curated.pd_orders` AS o 
+        ON c.order_id = o.code 
+        AND c.global_entity_id = o.global_entity_id
+        AND o.created_date_utc BETWEEN DATE_SUB(DATE_TRUNC(CURRENT_DATE-1,MONTH),INTERVAL 13 MONTH)-30 AND CURRENT_DATE - 1
+  WHERE c.global_entity_id IN ('OP_SE') 
+    AND c.stakeholder = 'Customer' 
+    AND c.created_date BETWEEN DATE_SUB(DATE_TRUNC(CURRENT_DATE-1,MONTH),INTERVAL 13 MONTH) AND CURRENT_DATE - 1
+    AND c.order_id != '0'
+  GROUP BY 1,2,3
+)
+, comp_and_refund AS (
+  SELECT 
+    global_entity_id
+    , order_id AS order_code
+    , ARRAY_AGG(
+      STRUCT(
+        event_timestamp
+        , agent_email
+        , event_type
+        , origin
+        , outcome
+        , purpose
+        , voucher_code
+        , refund_value_local
+        , compensation_value_local
+        , compensation_type
+        , compensation_category
+        
+
+      )
+    ) AS comp_and_refund_events
+  FROM `fulfillment-dwh-production.curated_data_shared_gcc_service.comp_and_refund_events`
+  WHERE global_entity_id IN ('OP_SE') 
+    AND event_date BETWEEN DATE_SUB(DATE_TRUNC(CURRENT_DATE-1,MONTH),INTERVAL 13 MONTH) AND CURRENT_DATE - 1
+  GROUP BY 1,2
+)
+, psp AS (
+  SELECT
+    a.global_entity_id
+    , a.merchant_reference AS order_code
+    , ARRAY_AGG(
+      STRUCT(
+        a.psp_reference
+        , a.booking_at_utc
+        , a.payment_method
+        , a.record_type
+        , a.authorised_pc
+        , a.captured_pc
+        , a.payable_sc
+      )
+      ) AS psp_transactions
+
+  FROM `fulfillment-dwh-production.pandata_curated.psp_adyen_eu_payments_accounting_report` AS a
+  WHERE a.global_entity_id = 'OP_SE' 
+    AND a.booking_at_utc BETWEEN DATE_SUB(DATE_TRUNC(CURRENT_DATE-1,MONTH),INTERVAL 13 MONTH) AND CURRENT_DATE - 1
+  GROUP BY 1,2  
+)
+, accounting_prep AS (
+  SELECT
+    a.global_entity_id
+    , a.uuid
+    , a.created_date_utc
+    , aa.is_order_last_entry
+    , aa.is_order_first_entry
+    , COALESCE(aa.products_plus_vat_local,0) AS products_plus_vat
+
+  FROM `fulfillment-dwh-production.pandata_curated.pd_orders_agg_accounting` a
+  , UNNEST(a.accounting) AS aa
+  LEFT JOIN `fulfillment-dwh-production.pandata_curated.pd_orders` AS o 
+         ON o.uuid = a.uuid 
+        AND o.created_date_utc = a.created_date_utc 
+        AND o.global_entity_id = a.global_entity_id
+  WHERE a.global_entity_id IN ('OP_SE')
+    AND a.created_date_utc BETWEEN DATE_SUB(DATE_TRUNC(CURRENT_DATE-1,MONTH),INTERVAL 13 MONTH)-1 AND CURRENT_DATE - 1
+    AND (aa.is_order_last_entry IS TRUE OR aa.is_order_first_entry IS TRUE)     
+)
+, gfv_change AS (
+  SELECT 
+    o.global_entity_id
+    , o.uuid AS order_uuid
+    , o.code AS order_code
+    , af.products_plus_vat AS gfv_initial
+    , al.products_plus_vat AS gfv_last
+    , af.products_plus_vat - al.products_plus_vat AS gfv_diff
+
+  FROM `fulfillment-dwh-production.pandata_curated.pd_orders` AS o
+  LEFT JOIN accounting_prep al 
+         ON o.uuid = al.uuid 
+        AND o.created_date_utc = al.created_date_utc 
+        AND o.global_entity_id = al.global_entity_id 
+        AND al.is_order_last_entry IS TRUE
+  LEFT JOIN accounting_prep af 
+         ON o.uuid = af.uuid 
+        AND o.created_date_utc = af.created_date_utc 
+        AND o.global_entity_id = af.global_entity_id 
+        AND af.is_order_first_entry IS TRUE
+  WHERE o.global_entity_id IN ('OP_SE')
+    AND o.created_date_utc BETWEEN DATE_SUB(DATE_TRUNC(CURRENT_DATE-1,MONTH),INTERVAL 13 MONTH) AND CURRENT_DATE - 1
+    AND af.products_plus_vat <> al.products_plus_vat
+    AND o.is_gross_order IS TRUE
+)
+, basket_updates AS (
+  SELECT
+    global_entity_id,
+    order_uuid,
+    p.updated_at_utc,
+    pd_product_uuid,
+    pd_product_variation_uuid,
+    p.title,
+    (SELECT STRING_AGG(DISTINCT title, ', ') FROM UNNEST(p.toppings)) AS topping_titles,
+    price_local,
+    subtotal_gross_local,
+    reason,
+    action,
+    original_quantity,
+    updated_quantity,
+
+    
+  FROM `fulfillment-dwh-production.pandata_curated.pd_basket_updates`
+  , UNNEST(products) AS p
+  WHERE created_date_utc BETWEEN DATE_SUB(DATE_TRUNC(CURRENT_DATE-1,MONTH),INTERVAL 13 MONTH)-1 AND CURRENT_DATE - 1
+    AND global_entity_id = 'OP_SE'
+    AND action IN ('SET_QUANTITY','REMOVE','SET_TOPPINGS')
+)
+, basket_updates2 AS (
+  SELECT 
+    *
+    , ROW_NUMBER() OVER (PARTITION BY order_uuid, pd_product_uuid, pd_product_variation_uuid, topping_titles, action ORDER BY updated_at_utc) AS set_action_first
+    , ROW_NUMBER() OVER (PARTITION BY order_uuid, pd_product_uuid, pd_product_variation_uuid, topping_titles, action ORDER BY updated_at_utc DESC) AS set_action_last
+    , LEAD(reason,1) OVER (PARTITION BY order_uuid, pd_product_uuid, pd_product_variation_uuid, topping_titles ORDER BY updated_at_utc) AS next_reason
+  FROM basket_updates
+)
+, basket_updates3 AS (
+  SELECT 
+    global_entity_id,
+    order_uuid,
+    pd_product_uuid,
+    pd_product_variation_uuid,
+    title,
+    topping_titles,
+    price_local,
+    COALESCE(SUM(CASE WHEN  action = 'SET_QUANTITY' AND set_action_first = 1 THEN original_quantity END),0) 
+    - COALESCE(SUM(CASE WHEN action = 'SET_QUANTITY' AND set_action_last = 1 THEN updated_quantity END),0)
+    + COALESCE(SUM(CASE WHEN action = 'REMOVE' AND COALESCE(next_reason,'') <> 'ITEMS_RESTORE' THEN original_quantity END),0)
+    AS removed_quantity,
+
+    COALESCE(SUM(CASE WHEN action = 'SET_QUANTITY' AND set_action_first = 1 THEN subtotal_gross_local END),0) 
+    - COALESCE(SUM(CASE WHEN action = 'SET_QUANTITY' AND set_action_last = 1 THEN (subtotal_gross_local/original_quantity)*updated_quantity END),0)
+    + COALESCE(SUM(CASE WHEN action = 'REMOVE' AND COALESCE(next_reason,'') <> 'ITEMS_RESTORE' THEN subtotal_gross_local END),0)
+    --Does not change the quantity of the product
+    + COALESCE(SUM(CASE WHEN action = 'SET_TOPPINGS' THEN subtotal_gross_local-price_local*original_quantity END),0)
+    AS missing_item_total_price
+
+  FROM basket_updates2
+  GROUP BY 1,2,3,4,5,6,7
+)
+, basket_updates_agg AS (
+  SELECT 
+    global_entity_id
+    , order_uuid
+    , ARRAY_AGG(
+      STRUCT(
+        pd_product_uuid,
+        pd_product_variation_uuid,
+        title,
+        topping_titles,
+        removed_quantity,
+        missing_item_total_price
+      )
+    ) AS basket_updates
+  FROM basket_updates3
+  WHERE removed_quantity > 0 OR missing_item_total_price > 0
+  GROUP BY 1,2
+)
+, pd_orders AS (
+  SELECT
+    o.global_entity_id
+    , o.uuid
+    , o.code 
+    , o.created_date_local
+    , o.vendor_code
+    , o.created_at_local
+    , o.order_comment
+    , o.is_gross_order
+    --, o.is_billable
+    , CASE WHEN o.created_date_local < '2022-04-01'  THEN bfh.is_billable ELSE bl.is_billable END is_billable
+    , o.is_failed_order
+    , o.total_value_local
+  FROM `fulfillment-dwh-production.pandata_curated.pd_orders` AS o
+  LEFT JOIN `fulfillment-dwh-production.pandata_curated.billing_flags` AS bl ON o.global_entity_id = bl.global_entity_id AND o.code= bl.order_code AND bl.updated_date_utc >= o.created_date_utc
+  LEFT JOIN `foodora-bi-se.bl_bi.billing_flags_historical` AS bfh ON o.global_entity_id = bfh.global_entity_id AND o.code= bfh.code AND bfh.created_date_utc = o.created_date_utc
+  WHERE o.global_entity_id = 'OP_SE'
+    AND o.created_date_utc BETWEEN DATE_SUB(DATE_TRUNC(CURRENT_DATE-1,MONTH),INTERVAL 13 MONTH)-1 AND CURRENT_DATE - 1
+)
+, base AS (
+  SELECT DISTINCT
+    global_entity_id
+    , order_uuid
+  FROM
+  (
+    
+    -------------------
+    --PARTIAL REFUNDS--
+    -------------------
+
+    SELECT
+      global_entity_id
+      , order_uuid
+    FROM gfv_change
+
+    UNION ALL
+
+    -------------------
+    --FULL REFUNDS--
+    -------------------
+
+    SELECT
+      global_entity_id
+      , uuid AS order_uuid
+    FROM pd_orders
+    WHERE is_gross_order IS TRUE
+      AND is_billable IS TRUE
+      AND is_failed_order IS TRUE
+  )
+),
+
+
+
+
+prep AS ( 
+SELECT 
+  a.*
+  , o.code AS order_code
+  , o.vendor_code
+  , o.created_at_local AS created_at_loc
+  , o.created_date_local
+  , r.basket_updates
+  , cr.comp_and_refund_events
+  , c.contacts
+  , p.psp_transactions
+  , o.is_billable
+  , o.total_value_local
+  , gfv_initial AS gfv_initial
+  , gfv_last AS gfv_latest
+  , g.gfv_diff AS gfv_change_value
+  , (SELECT SUM(missing_item_total_price) FROM UNNEST(r.basket_updates)) AS basket_update_value
+
+  , CASE
+      WHEN is_gross_order IS TRUE AND is_billable IS TRUE AND is_failed_order IS TRUE THEN TRUE 
+      ELSE FALSE
+    END AS is_full_refund
+
+  , CASE 
+      WHEN ABS((SELECT SUM(missing_item_total_price) FROM UNNEST(r.basket_updates)) - g.gfv_diff) > 1 THEN TRUE 
+      ELSE FALSE
+    END AS has_gfv_basket_diff
+
+  , CASE
+      WHEN g.gfv_diff > 0 THEN TRUE 
+      ELSE FALSE
+    END AS has_gfv_diff
+
+  , CASE
+      WHEN (SELECT COUNT(*) FROM UNNEST(c.contacts)) > 0 THEN TRUE 
+      ELSE FALSE
+    END AS has_contacts
+
+  , CASE
+      WHEN (SELECT SUM(missing_item_total_price) FROM UNNEST(r.basket_updates)) > 0 THEN TRUE 
+      ELSE FALSE
+    END AS has_basket_update_value
+
+  , o.order_comment
+FROM base AS a
+LEFT JOIN basket_updates_agg AS r
+       ON a.global_entity_id=r.global_entity_id
+      AND a.order_uuid  = r.order_uuid
+LEFT JOIN gfv_change AS g
+       ON a.global_entity_id=g.global_entity_id
+      AND a.order_uuid  = g.order_uuid
+LEFT JOIN pd_orders AS o
+       ON a.global_entity_id=o.global_entity_id
+      AND a.order_uuid  = o.uuid
+LEFT JOIN contacts AS c
+       ON a.global_entity_id=c.global_entity_id
+      AND a.order_uuid  = c.order_uuid
+LEFT JOIN comp_and_refund AS cr
+       ON a.global_entity_id=cr.global_entity_id
+      AND o.code  = cr.order_code
+LEFT JOIN psp AS p
+       ON a.global_entity_id=p.global_entity_id
+      AND o.code  = p.order_code
+WHERE TRUE
+  AND o.created_at_local BETWEEN DATE_SUB(DATE_TRUNC(CURRENT_DATE-1,MONTH),INTERVAL 13 MONTH) AND CURRENT_DATE - 1
+  AND o.is_gross_order
+ORDER BY created_at_local, code
+), 
+
+
+second as (
+SELECT 
+*
+, created_at_loc AS date_local
+, v.name AS vendor_name 
+FROM prep AS r 
+LEFT JOIN `fulfillment-dwh-production.pandata_curated.pd_vendors` AS v
+
+       ON r.global_entity_id = v.global_entity_id
+      AND r.vendor_code = v.vendor_code
+
+WHERE r.global_entity_id = "OP_SE"
+  AND r.created_at_loc >= "2022-01-01"
+) 
+
+
+SELECT 
+  second.order_code
+, date_local
+, EXTRACT(MONTH FROM created_at_loc) AS month
+
+, vendor_name
+, chain_name
+
+, is_full_refund
+, comp_and_refund_events[SAFE_OFFSET(0)].refund_value_local
+, comp_and_refund_events[SAFE_OFFSET(0)].compensation_value_local
+, total_value_local
+
+, comp_and_refund_events[SAFE_OFFSET(0)].origin
+, comp_and_refund_events[SAFE_OFFSET(0)].purpose
+, contacts[SAFE_OFFSET(0)].contact_reason_l3
+
+, lg.rider.order_delay_in_seconds AS delay_secs
+
+
+FROM second
+LEFT JOIN `fulfillment-dwh-production.pandata_curated.lg_orders` AS lg 
+ON second.order_code = lg.order_code
+WHERE second.chain_name = "Foodora Market"
+AND lg.global_entity_id = "OP_SE"
+AND lg.created_date_utc >= "2022-01-01"
+
+
+
