@@ -1,0 +1,30 @@
+WITH prep AS (
+SELECT 
+  order_code
+, r.created_at_local
+, EXTRACT(MONTH FROM r.created_at_local) AS month
+
+, v.name AS vendor_name
+, v.chain_name
+
+, is_full_refund
+, comp_and_refund_events[SAFE_OFFSET(0)].refund_value_local
+, comp_and_refund_events[SAFE_OFFSET(0)].compensation_value_local
+, total_value_local
+
+, comp_and_refund_events[SAFE_OFFSET(0)].origin
+, comp_and_refund_events[SAFE_OFFSET(0)].purpose
+, contacts[SAFE_OFFSET(0)].contact_reason_l3
+
+FROM `foodora-bi-se.bl_bi.refund_data` AS r
+LEFT JOIN `fulfillment-dwh-production.pandata_curated.pd_vendors` AS v
+       ON r.global_entity_id = v.global_entity_id
+      AND r.vendor_code = v.vendor_code
+
+WHERE r.global_entity_id = "OP_SE"
+  AND r.created_at_local >= "2022-01-01"
+)
+
+SELECT * FROM prep 
+WHERE chain_name = "Foodora Market"
+
