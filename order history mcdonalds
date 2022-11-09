@@ -1,7 +1,12 @@
 WITH vendor_grouping AS (
 SELECT 
 c.code AS customer_id
-, order_code
+, o.order_code
+, pd.delivery_fee_local
+, v.delivery_type
+-- , pd.is_pickup 
+-- , pd.is_own_delivery
+
 -- , EXTRACT(MONTH FROM order_date) AS order_month
 -- , CASE WHEN chain_code = "cv7oz" /*Max Hamburgare*/ THEN 1 END AS max_orders
 , CASE WHEN chain_code = "ci1kh"	/*McDonald's*/ THEN 1 END AS mcd_orders
@@ -12,35 +17,50 @@ c.code AS customer_id
 FROM `foodora-bi-se.bl_bi.order_rank` AS o 
   LEFT JOIN  `fulfillment-dwh-production.pandata_curated.cus_customers` AS c
         ON o.pd_customer_id = c.id
+  LEFT JOIN `fulfillment-dwh-production.pandata_curated.pd_orders` AS pd 
+        ON o.order_code = pd.code 
+       AND o.global_entity_id = pd.global_entity_id 
+  LEFT JOIN `fulfillment-dwh-production.curated_data_shared.orders_v2` v
+        ON o.order_code = v.order_code AND o.global_entity_id = v.entity_id 
 
 WHERE o.created_date_utc >= "2022-01-01" 
+  AND pd.created_date_utc >= "2022-01-01" 
+  AND v.created_date >= "2022-01-01"   
   AND o.global_entity_id = "OP_SE"
   AND c.global_entity_id = "OP_SE"
-  AND is_valid_order IS TRUE
-  AND is_gross_order IS TRUE
+  AND o.is_valid_order IS TRUE
+  AND o.is_gross_order IS TRUE
 ),
 
 grouping_prep AS (
 SELECT 
   customer_id 
+, delivery_type
 -- , order_month
 , SUM(mcd_orders) AS total_mcd_orders
 , SUM(other_vendor_orders) AS total_other_orders
-, COUNT(order_code) AS total_orders
+, COUNT(DISTINCT order_code) AS total_orders
+, SUM(delivery_fee_local) AS delivery_fee
 
 FROM vendor_grouping 
 
-GROUP BY customer_id--, order_month
-ORDER BY 1 DESC
+GROUP BY 1,2
+
 )
 
 
 SELECT
--- COUNT(DISTINCT customer_id)
-*
+  delivery_fee
+, delivery_type
+, COUNT(DISTINCT customer_id) AS number_of_customers
+
 FROM grouping_prep 
 
-WHERE total_mcd_orders > 0 
+WHERE 
+-- total_mcd_orders = 1 
+ total_orders = 1 
 
+GROUP BY 1,2
+ORDER BY 3 DESC
 
 
