@@ -3,9 +3,9 @@ SELECT
 c.code AS customer_id
 , o.order_code
 , pd.delivery_fee_local
-, v.delivery_type
--- , pd.is_pickup 
--- , pd.is_own_delivery
+-- , v.delivery_type
+, CONCAT(pd.is_pickup) AS pickup
+, CONCAT(pd.is_own_delivery) AS od_vd
 
 -- , EXTRACT(MONTH FROM order_date) AS order_month
 -- , CASE WHEN chain_code = "cv7oz" /*Max Hamburgare*/ THEN 1 END AS max_orders
@@ -35,7 +35,9 @@ WHERE o.created_date_utc >= "2022-01-01"
 grouping_prep AS (
 SELECT 
   customer_id 
-, delivery_type
+-- , delivery_type
+, pickup
+, od_vd
 -- , order_month
 , SUM(mcd_orders) AS total_mcd_orders
 , SUM(other_vendor_orders) AS total_other_orders
@@ -44,14 +46,16 @@ SELECT
 
 FROM vendor_grouping 
 
-GROUP BY 1,2
+GROUP BY 1,2,3
 
 )
 
 
 SELECT
   delivery_fee
-, delivery_type
+-- , delivery_type
+, pickup 
+, od_vd
 , COUNT(DISTINCT customer_id) AS number_of_customers
 
 FROM grouping_prep 
@@ -60,7 +64,7 @@ WHERE
 -- total_mcd_orders = 1 
  total_orders = 1 
 
-GROUP BY 1,2
+GROUP BY 1,2,3
 ORDER BY 3 DESC
 
 
