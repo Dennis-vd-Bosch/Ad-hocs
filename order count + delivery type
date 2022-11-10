@@ -1,0 +1,44 @@
+WITH prep AS ( 
+SELECT 
+  pd_customer_id 
+, code
+FROM `fulfillment-dwh-production.pandata_curated.pd_orders`
+
+WHERE created_date_utc BETWEEN "2022-01-01" AND "2022-11-01" 
+  AND global_entity_id = "OP_SE"
+  AND is_gross_order IS TRUE 
+  AND is_valid_order IS TRUE 
+GROUP BY 1,2
+),
+
+second_prep AS ( 
+SELECT 
+pd_customer_id AS pd_cus 
+, COUNT(DISTINCT code) AS num_orders
+FROM prep 
+
+GROUP BY 1
+),
+
+third_prep AS ( 
+SELECT 
+  pd_cus
+, b.code 
+, b.delivery_provider.type
+FROM second_prep 
+LEFT JOIN `fulfillment-dwh-production.pandata_curated.pd_orders` AS b ON pd_cus = b.pd_customer_id  
+
+WHERE num_orders = 1 
+  AND b.created_date_utc BETWEEN "2022-01-01" AND "2022-11-01" 
+  AND b.global_entity_id = "OP_SE"
+  AND b.is_gross_order IS TRUE 
+  AND b.is_valid_order IS TRUE 
+)
+
+SELECT 
+  type 
+, COUNT(DISTINCT pd_cus) AS num_customers
+FROM third_prep 
+GROUP BY 1 
+ORDER BY 2 DESC
+
