@@ -19,6 +19,7 @@ WHERE b.created_date_utc BETWEEN "2022-01-01" AND "2022-11-08"
   AND b.global_entity_id = "OP_SE"
   AND b.is_gross_order IS TRUE 
   AND b.is_valid_order IS TRUE 
+  AND delivery_fee_local = 0 
 ),
 
 
