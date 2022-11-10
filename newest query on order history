@@ -1,0 +1,60 @@
+WITH prep AS ( 
+SELECT 
+  b.pd_customer_id AS pd_cus
+, b.code
+-- , delivery_fee_local AS df_local
+, CASE WHEN b.delivery_provider.type = "own_delivery_foodpanda" AND b.is_pickup IS FALSE THEN 1 ELSE 0 END AS OD_order
+, CASE WHEN b.delivery_provider.type = "own_delivery_foodpanda" AND b.is_pickup IS TRUE THEN 1 ELSE 0 END AS OD_pickup_order
+, CASE WHEN b.delivery_provider.type IS NULL AND b.is_pickup IS FALSE THEN 1 ELSE 0 END AS VD_order
+, CASE WHEN b.delivery_provider.type IS NULL AND b.is_pickup IS TRUE THEN 1 ELSE 0 END AS VD_pickup_order
+
+, CASE WHEN o.chain_code = "ci1kh"	/*McDonald's*/ THEN 1 END AS mcd_orders
+, CASE WHEN o.chain_code NOT IN ("ci1kh") OR chain_code IS NULL THEN 1 END AS other_vendor_orders 
+
+FROM `fulfillment-dwh-production.pandata_curated.pd_orders` AS b
+LEFT JOIN `foodora-bi-se.bl_bi.order_rank` AS o 
+ON b.code = o.order_code AND b.global_entity_id = o.global_entity_id 
+
+WHERE b.created_date_utc BETWEEN "2022-01-01" AND "2022-11-08" 
+  AND b.global_entity_id = "OP_SE"
+  AND b.is_gross_order IS TRUE 
+  AND b.is_valid_order IS TRUE 
+),
+
+
+second_prep AS ( 
+SELECT 
+  pd_cus 
+, SUM(OD_order) AS OD 
+, SUM(OD_pickup_order) AS OD_PICKUP
+, SUM(VD_order) AS VD
+, SUM(VD_pickup_order) AS VD_PICKUP
+
+, SUM(mcd_orders) AS total_mcd_orders
+, SUM(other_vendor_orders) AS total_other_orders
+
+, COUNT(DISTINCT code) AS total_orders
+FROM prep 
+GROUP BY 1
+)
+
+
+SELECT * FROM second_prep WHERE total_orders <= 3 
+
+
+
+-- SELECT
+--   type
+-- , pickup 
+-- , COUNT(DISTINCT pd_cus) AS number_of_customers
+-- FROM second_prep  
+-- WHERE total_orders <= 3 
+-- GROUP BY 1,2
+
+
+
+-------- newest best query 
+
+
+
+
