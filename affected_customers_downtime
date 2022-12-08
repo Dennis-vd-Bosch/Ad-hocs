@@ -1,0 +1,78 @@
+WITH prep AS (
+SELECT  
+  created_date
+, delivery_type
+, EXTRACT(HOUR FROM DATETIME(created_at, timezone)) AS hour_of_day_local
+, vendor.order_status
+, order_code 
+-- , COUNT(order_code) AS number_of_orders
+, ROUND(rider.deliveries[SAFE_OFFSET(0)].timings.delivery_delay / 60) AS avg_delay_in_min
+
+, DATETIME(created_at,timezone) AS created_at_local
+, DATETIME(vendor.cancelled_at, timezone) AS cancelled_at_local
+, EXTRACT(HOUR FROM(vendor.cancelled_at - created_at)) AS hours_to_cancel
+, EXTRACT(MINUTE FROM(vendor.cancelled_at - created_at)) AS mins_to_cancel
+, EXTRACT(SECOND FROM(vendor.cancelled_at - created_at)) AS secs_to_cancel
+
+, EXTRACT(HOUR FROM(vendor.cancelled_at - created_at))/60 + EXTRACT(MINUTE FROM(vendor.cancelled_at - created_at)) + EXTRACT(SECOND FROM(vendor.cancelled_at - created_at))/60 AS total_canc_time_min
+
+, timestamp_add(timestamp_trunc(DATETIME(created_at,timezone), hour), interval cast(extract(minute FROM DATETIME(created_at,timezone)) / 15 as int64) * 15  minute) AS time_created_rounded_quarter_local
+, timestamp_add(timestamp_trunc(DATETIME(created_at,timezone), hour), interval cast(extract(minute FROM DATETIME(created_at,timezone)) / 30 as int64) * 30  minute) AS time_created_rounded_half_hour_local
+, timestamp_add(timestamp_trunc(DATETIME(created_at,timezone), hour), interval cast(extract(minute FROM DATETIME(created_at,timezone)) / 60 as int64) * 60  minute) AS time_created_rounded_hour_local
+
+, timestamp_add(timestamp_trunc(DATETIME(vendor.cancelled_at, timezone), hour), interval cast(extract(minute from vendor.cancelled_at) / 15 as int64)* 15  minute) AS time_cancelled_rounded_quarter_local
+, timestamp_add(timestamp_trunc(DATETIME(vendor.cancelled_at, timezone), hour), interval cast(extract(minute from vendor.cancelled_at) / 30 as int64)* 30  minute) AS time_cancelled_rounded_half_hour_local
+, timestamp_add(timestamp_trunc(DATETIME(vendor.cancelled_at, timezone), hour), interval cast(extract(minute from vendor.cancelled_at) / 60 as int64)* 60  minute) AS time_cancelled_rounded_hour_local
+
+, DATETIME(vendor.accepted_by_vendor_at, timezone) AS vendor_accepted_at_local
+, DATETIME(vendor.delivered_at, timezone) AS delivered_at_local
+
+-- , rider.vendor_accepted_at
+
+-- , rider.vendor_accepted_at
+, DATETIME(vendor.received_by_vendor_at, timezone) AS vendor_reiceved_at_local 
+, DATETIME(vendor.created_at, timezone) AS created_in_system_at_local
+, DATETIME(vendor.received_at, timezone) AS order_in_system_at_local
+, DATETIME(vendor.sending_to_vendor_at, timezone) AS sent_to_vendor_at_local
+
+
+, DATETIME(rider.deliveries[SAFE_OFFSET(0)].rider_dispatched_at, timezone) AS rider_dispatched_at_local 
+
+
+, DATETIME(vendor.estimated_deliver_at, timezone) AS estim_deliv_at_local 
+, DATETIME(vendor.original_estimated_deliver_at, timezone) AS orig_est_del_at_local 
+, DATETIME(vendor.delivered_at,timezone) - DATETIME(vendor.accepted_by_vendor_at, timezone) time_of_delivery
+
+
+, rider.timings.promised_delivery_time
+, rider.timings.actual_delivery_time
+, rider.timings.order_delay
+
+-- , ROUND((rider.timings.actual_delivery_time - rider.timings.promised_delivery_time) / 60),0 AS order_delay_min
+ 
+FROM `fulfillment-dwh-production.curated_data_shared.orders_v2` 
+WHERE created_date = CURRENT_DATE - 1
+AND entity_id = "OP_SE"
+AND delivery_type != "VENDOR_DELIVERY"
+) 
+
+
+
+SELECT 
+prep.*
+, pd.pd_customer_id AS customer_id 
+, cu.id 
+, cu.code 
+, cu.email
+
+FROM prep 
+LEFT JOIN `fulfillment-dwh-production.pandata_curated.pd_orders` AS pd  
+ON prep.order_code = pd.code 
+
+LEFT JOIN `fulfillment-dwh-production.pandata_curated.cus_customers` AS cu 
+ON pd.pd_customer_id = cu.id 
+
+WHERE pd.created_date_utc = CURRENT_DATE - 1 
+AND pd.global_entity_id = "OP_SE"
+AND cu.global_entity_id = "OP_SE"
+
