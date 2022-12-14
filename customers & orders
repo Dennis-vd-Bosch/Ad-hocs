@@ -1,0 +1,33 @@
+WITH customer_order_prep AS ( 
+SELECT 
+  pd_customer_id
+, COUNT(code) AS number_of_orders
+FROM `fulfillment-dwh-production.pandata_curated.pd_orders`
+WHERE global_entity_id = "OP_SE"
+  AND created_date_utc >= "2022-01-01"
+GROUP BY pd_customer_id
+),
+
+range_orders AS (
+SELECT 
+  pd_customer_id
+
+, CASE WHEN number_of_orders = 0 THEN 0
+       WHEN number_of_orders = 1 THEN 1
+       WHEN number_of_orders = 2 THEN 2
+       WHEN number_of_orders = 3 THEN 3
+       WHEN number_of_orders = 4 THEN 4
+       WHEN number_of_orders = 5 THEN 5
+       WHEN number_of_orders >= 500 THEN 500
+       ELSE FLOOR(number_of_orders / 5)*5 
+       END AS grouped_range_of_orders_made
+FROM customer_order_prep
+WHERE number_of_orders IS NOT NULL OR number_of_orders != 0 
+)
+
+SELECT 
+  range_orders.grouped_range_of_orders_made 
+, COUNT(pd_customer_id) AS number_of_orders 
+FROM range_orders 
+GROUP BY grouped_range_of_orders_made
+ORDER BY grouped_range_of_orders_made ASC 
